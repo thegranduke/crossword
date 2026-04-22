@@ -1,8 +1,14 @@
+export type GridSize = 10 | 15 | 20;
+
 export type Cell = {
   row: number;
   col: number;
   letter: string;
-  solution: string;
+  isBlocked: boolean;
+  acrossNumber?: number;
+  downNumber?: number;
+  userInput: string;
+  state: 'empty' | 'correct' | 'incorrect';
 };
 
 export type WordEntry = {
@@ -10,7 +16,20 @@ export type WordEntry = {
   clue: string;
 };
 
+export type PlacedWord = {
+  word: string;
+  clue: string;
+  direction: 'across' | 'down';
+  startRow: number;
+  startCol: number;
+  number: number;
+};
+
 export type Puzzle = {
-  words: WordEntry[];
+  gridSize: GridSize;
+  minWords: number;
   grid: Cell[][];
+  placedWords: PlacedWord[];
+  rows: number;
+  cols: number;
 };

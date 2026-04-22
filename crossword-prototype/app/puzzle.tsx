@@ -1,6 +1,7 @@
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { usePuzzleStore } from '@/modules/state/usePuzzleStore';
 import { Grid } from '@/components/Grid';
+import type { PlacedWord } from '@/modules/types/puzzle';
 
 export default function PuzzleScreen() {
   const puzzle = usePuzzleStore((s) => s.puzzle);
@@ -13,18 +14,47 @@ export default function PuzzleScreen() {
     );
   }
 
+  const acrossClues = puzzle.placedWords
+    .filter((word) => word.direction === 'across')
+    .sort((a, b) => a.number - b.number);
+
+  const downClues = puzzle.placedWords
+    .filter((word) => word.direction === 'down')
+    .sort((a, b) => a.number - b.number);
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.sectionTitle}>Grid</Text>
+      <Text style={styles.metaText}>
+        Size: {puzzle.gridSize}x{puzzle.gridSize} | Placed: {puzzle.placedWords.length} | Target minimum: {puzzle.minWords}
+      </Text>
+
       <View style={styles.gridWrapper}>
-        <Grid grid={puzzle.grid} />
+        <Grid grid={puzzle.grid} placedWords={puzzle.placedWords} />
       </View>
 
-      <Text style={styles.sectionTitle}>Clues</Text>
+      <View style={styles.clueColumns}>
+        <View style={styles.clueColumn}>
+          <ClueSection title="Across" clues={acrossClues} />
+        </View>
+        <View style={styles.clueColumn}>
+          <ClueSection title="Down" clues={downClues} />
+        </View>
+      </View>
+    </ScrollView>
+  );
+}
+
+function ClueSection({ title, clues }: { title: string; clues: PlacedWord[] }) {
+  if (clues.length === 0) return null;
+
+  return (
+    <>
+      <Text style={styles.sectionTitle}>{title}</Text>
       <View style={styles.clueList}>
-        {puzzle.words.map((entry, i) => (
-          <View key={entry.word} style={styles.clueRow}>
-            <Text style={styles.clueNumber}>{i + 1}.</Text>
+        {clues.map((entry) => (
+          <View key={`${entry.direction}-${entry.number}-${entry.word}`} style={styles.clueRow}>
+            <Text style={styles.clueNumber}>{entry.number}.</Text>
             <View style={styles.clueContent}>
               <Text style={styles.clueText}>{entry.clue}</Text>
               <Text style={styles.clueAnswer}>({entry.word.length} letters)</Text>
@@ -32,7 +62,7 @@ export default function PuzzleScreen() {
           </View>
         ))}
       </View>
-    </ScrollView>
+    </>
   );
 }
 
@@ -59,14 +89,19 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
+  metaText: {
+    textAlign: 'center',
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 2,
+  },
   gridWrapper: {
-    alignItems: 'flex-start',
-    backgroundColor: '#f5f5f5',
-    padding: 12,
-    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
   },
   clueList: {
-    gap: 10,
+    gap: 8,
   },
   clueRow: {
     flexDirection: 'row',
@@ -76,7 +111,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#111',
-    minWidth: 22,
+    minWidth: 24,
   },
   clueContent: {
     flex: 1,
@@ -89,5 +124,14 @@ const styles = StyleSheet.create({
   clueAnswer: {
     fontSize: 12,
     color: '#999',
+  },
+  clueColumns: {
+    flexDirection: 'row',
+    gap: 14,
+    alignItems: 'flex-start',
+  },
+  clueColumn: {
+    flex: 1,
+    minWidth: 0,
   },
 });

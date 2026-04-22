@@ -1,19 +1,22 @@
-import type { Puzzle } from '@/modules/types/puzzle';
-import { generateWords } from './generateWords';
-import { generateClues } from './generateClues';
-import { generateGrid } from '@/modules/grid/gridBuilder';
+import type { GridSize, Puzzle } from '@/modules/types/puzzle';
+import { generateWordClues } from './generateWordClues';
+import generateGrid from '@/modules/grid/gridBuilder';
+import { getMinWordsForGridSize } from './config';
 
-/**
- * Full puzzle generation pipeline.
- * Topic → words → clues → grid → Puzzle
- */
-export function generatePuzzle(topic: string): Puzzle {
-  const words = generateWords(topic);
-  const wordsWithClues = generateClues(words);
-  const grid = generateGrid(words);
+export async function generatePuzzle(topic: string, gridSize: GridSize): Promise<Puzzle> {
+  const minWords = getMinWordsForGridSize(gridSize);
+  const wordClues = await generateWordClues(topic, gridSize);
+  const { grid, placedWords, rows, cols } = generateGrid(wordClues, {
+    gridSize,
+    minPlacedWords: minWords,
+  });
 
   return {
-    words: wordsWithClues,
+    gridSize,
+    minWords,
     grid,
+    placedWords,
+    rows,
+    cols,
   };
 }

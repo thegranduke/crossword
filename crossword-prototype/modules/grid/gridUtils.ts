@@ -1,18 +1,18 @@
 import type { Cell } from '@/modules/types/puzzle';
 
-/** Returns true if the cell is part of an active word (has a solution letter). */
+/** True if the cell is an active (non-blocked) letter cell. */
 export function isActiveCell(cell: Cell): boolean {
-  return cell.solution !== '';
+  return !cell.isBlocked;
 }
 
-/** Returns true if a user's input matches the solution. */
+/** True if the user's input matches the solution letter. */
 export function isCorrectLetter(cell: Cell): boolean {
-  return cell.letter !== '' && cell.letter === cell.solution;
+  return cell.userInput !== '' && cell.userInput === cell.letter;
 }
 
-/** Returns true if all active cells are filled correctly. */
+/** True if every active cell has been filled in correctly. */
 export function isPuzzleComplete(grid: Cell[][]): boolean {
   return grid.every((row) =>
-    row.every((cell) => !isActiveCell(cell) || isCorrectLetter(cell))
+    row.every((cell) => cell.isBlocked || isCorrectLetter(cell)),
   );
 }
