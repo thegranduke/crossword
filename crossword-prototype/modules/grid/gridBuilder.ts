@@ -161,7 +161,9 @@ function createCandidate(
     return true;
   };
 
-  const sorted = [...wordClues].sort((a, b) => b.word.length - a.word.length);
+  const sorted = [...wordClues]
+    .filter((entry) => entry.word.length <= gridSize)
+    .sort((a, b) => b.word.length - a.word.length);
   const [anchor, ...rest] = sorted;
 
   if (!anchor) {
@@ -298,14 +300,16 @@ export default function generateGrid(wordClues: WordEntry[], options: GridOption
   const { gridSize, minPlacedWords } = options;
   const attempts = options.attempts ?? 72;
 
-  if (wordClues.length === 0) {
+  const fitForGrid = wordClues.filter((entry) => entry.word.length <= gridSize);
+
+  if (fitForGrid.length === 0) {
     return { grid: [], placedWords: [], rows: 0, cols: 0 };
   }
 
-  let best = createCandidate(wordClues, gridSize, minPlacedWords);
+  let best = createCandidate(fitForGrid, gridSize, minPlacedWords);
 
   for (let attempt = 1; attempt < attempts; attempt++) {
-    const candidate = createCandidate(wordClues, gridSize, minPlacedWords);
+    const candidate = createCandidate(fitForGrid, gridSize, minPlacedWords);
     const meetsMinimum = candidate.placements.length >= minPlacedWords;
     const bestMeetsMinimum = best.placements.length >= minPlacedWords;
 
