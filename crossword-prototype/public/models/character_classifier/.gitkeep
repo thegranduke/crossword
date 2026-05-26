@@ -1,0 +1,5 @@
+# Place TF.js export here (from scripts/export_model_for_web.py):
+#   model.json
+#   group1-shard1of1.bin  (or similar weight files)
+#
+# Loaded at: /models/character_classifier/model.json

@@ -1,10 +1,18 @@
 import { useMemo } from 'react';
-import { View, Text, StyleSheet, useWindowDimensions } from 'react-native';
+import { View, StyleSheet, useWindowDimensions } from 'react-native';
 import type { Cell, PlacedWord } from '@/modules/types/puzzle';
+import { GridCell } from '@/components/GridCell';
 
 type Props = {
   grid: Cell[][];
   placedWords: PlacedWord[];
+  selectedCell?: { row: number; col: number } | null;
+  /** FR-22: cells belonging to the active across/down word(s) */
+  highlightedCellKeys?: Set<string>;
+  onCellPress?: (row: number, col: number) => void;
+  onCellLetter?: (row: number, col: number, letter: string) => void;
+  /** Tap on grid background (not on a cell) — e.g. deselect active cell */
+  onCanvasPress?: () => void;
 };
 
 function resolveCellSize(gridSize: number, maxCanvasWidth: number): number {
@@ -12,7 +20,15 @@ function resolveCellSize(gridSize: number, maxCanvasWidth: number): number {
   return Math.max(14, Math.min(34, target));
 }
 
-export function Grid({ grid, placedWords }: Props) {
+export function Grid({
+  grid,
+  placedWords,
+  selectedCell,
+  highlightedCellKeys,
+  onCellPress,
+  onCellLetter,
+  onCanvasPress,
+}: Props) {
   const { width } = useWindowDimensions();
   const gridSize = grid.length;
 
@@ -24,9 +40,10 @@ export function Grid({ grid, placedWords }: Props) {
     return map;
   }, [placedWords]);
 
-  const activeCells = useMemo(() => {
-    return grid.flatMap((row) => row.filter((cell) => !cell.isBlocked));
-  }, [grid]);
+  const activeCells = useMemo(
+    () => grid.flatMap((row) => row.filter((cell) => !cell.isBlocked)),
+    [grid],
+  );
 
   const cellSize = resolveCellSize(gridSize || 10, Math.min(width - 56, 520));
   const canvasSize = cellSize * gridSize;
@@ -35,24 +52,58 @@ export function Grid({ grid, placedWords }: Props) {
     <View style={[styles.canvas, { width: canvasSize, height: canvasSize }]}>
       {activeCells.map((cell) => {
         const cellNumber = startNumbers.get(`${cell.row},${cell.col}`);
+        const isSelected =
+          selectedCell?.row === cell.row && selectedCell?.col === cell.col;
+
+        const isInActiveWord = highlightedCellKeys?.has(`${cell.row},${cell.col}`) ?? false;
+
+        let cellBg = '#ffffff';
+        if (isSelected) {
+          cellBg = '#d0e4ff';
+        } else if (isInActiveWord) {
+          cellBg = '#e8f0ff';
+        } else if (cell.state === 'correct') {
+          cellBg = '#d4f0d4';
+        } else if (cell.state === 'incorrect') {
+          cellBg = '#ffd4d4';
+        }
+
+        const borderColor =
+          isSelected ? '#3a6ef5' : isInActiveWord ? '#7aa8f5' : '#2c2c2c';
+        const borderWidth = isSelected ? 2 : isInActiveWord ? 1.5 : 1;
+
+        const letterStyle =
+          cell.state === 'correct'
+            ? styles.letterCorrect
+            : cell.state === 'incorrect'
+              ? styles.letterIncorrect
+              : undefined;
+
         return (
-          <View
+          <GridCell
             key={`${cell.row}-${cell.col}`}
-            style={[
-              styles.cell,
-              {
-                width: cellSize,
-                height: cellSize,
-                left: cell.col * cellSize,
-                top: cell.row * cellSize,
-              },
-            ]}
-          >
-            {cellNumber !== undefined && <Text style={styles.cellNumber}>{cellNumber}</Text>}
-            <Text style={styles.letter}>{cell.letter}</Text>
-          </View>
+            cellNumber={cellNumber}
+            userInput={cell.userInput}
+            cellBg={cellBg}
+            borderColor={borderColor}
+            borderWidth={borderWidth}
+            letterStyle={letterStyle}
+            width={cellSize}
+            height={cellSize}
+            left={cell.col * cellSize}
+            top={cell.row * cellSize}
+            isSelected={isSelected}
+            onSelect={() => onCellPress?.(cell.row, cell.col)}
+            onLetter={(letter) => onCellLetter?.(cell.row, cell.col, letter)}
+          />
         );
       })}
+      {/* Tap gaps between cells to deselect — cells stop propagation */}
+      <View
+        style={[StyleSheet.absoluteFill, styles.canvasHitArea]}
+        onStartShouldSetResponder={() => true}
+        onResponderRelease={onCanvasPress}
+      />
     </View>
   );
 }
@@ -60,27 +111,15 @@ export function Grid({ grid, placedWords }: Props) {
 const styles = StyleSheet.create({
   canvas: {
     position: 'relative',
+    overflow: 'visible',
   },
-  cell: {
-    position: 'absolute',
-    borderWidth: 1,
-    borderColor: '#2c2c2c',
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
+  canvasHitArea: {
+    zIndex: 0,
   },
-  cellNumber: {
-    position: 'absolute',
-    top: 1,
-    left: 2,
-    fontSize: 7,
-    fontWeight: '700',
-    color: '#555',
-    lineHeight: 9,
+  letterCorrect: {
+    color: '#1a7a1a',
   },
-  letter: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#111',
+  letterIncorrect: {
+    color: '#c0392b',
   },
 });
