@@ -1,6 +1,6 @@
 /**
- * Single crossword cell: type with keyboard or draw in-place.
- * Strokes are recognized after RECOGNITION_DEBOUNCE_MS and replace the cell value.
+ * Single crossword cell: draw in the cell bounds, or type via a hidden input.
+ * Web uses pointer events; native uses PanResponder.
  */
 
 import React, { useRef, useState, useCallback, useEffect } from 'react';
@@ -12,15 +12,16 @@ import {
   StyleSheet,
   PanResponder,
   Platform,
+  type GestureResponderEvent,
 } from 'react-native';
-import Svg, { Polyline } from 'react-native-svg';
+import Svg, { Polyline, Circle } from 'react-native-svg';
 import { recognizeLetter } from '@/modules/recognition/mlRecognize';
 import type { Point } from '@/modules/recognition/dollar';
 
 const RECOGNITION_DEBOUNCE_MS = 1500;
-const MIN_STROKE_POINTS = 5;
-/** Fixed draw/recognition size — independent of grid cell pixel size */
-const INPUT_CANVAS_SIZE = 120;
+const MIN_STROKE_POINTS = 4;
+
+type RecognitionPhase = 'idle' | 'drawing' | 'waiting' | 'recognizing';
 
 type Props = {
   cellNumber?: number;
@@ -38,11 +39,23 @@ type Props = {
   onLetter: (letter: string) => void;
 };
 
-function stopPointerBubble(
-  e: { stopPropagation?: () => void; nativeEvent?: { stopPropagation?: () => void } },
-) {
-  e.stopPropagation?.();
-  e.nativeEvent?.stopPropagation?.();
+function getLocalPoint(
+  e: GestureResponderEvent,
+  layout: { x: number; y: number; width: number; height: number } | null,
+): Point {
+  const ne = e.nativeEvent as {
+    locationX?: number;
+    locationY?: number;
+    pageX?: number;
+    pageY?: number;
+  };
+  if (ne.locationX != null && ne.locationY != null) {
+    return { x: ne.locationX, y: ne.locationY };
+  }
+  if (layout && ne.pageX != null && ne.pageY != null) {
+    return { x: ne.pageX - layout.x, y: ne.pageY - layout.y };
+  }
+  return { x: 0, y: 0 };
 }
 
 export function GridCell({
@@ -61,63 +74,70 @@ export function GridCell({
   onLetter,
 }: Props) {
   const inputRef = useRef<TextInput>(null);
+  const drawSurfaceRef = useRef<View>(null);
+  const layoutRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const completedStrokesRef = useRef<Point[][]>([]);
   const activeStrokeRef = useRef<Point[]>([]);
   const [completedStrokes, setCompletedStrokes] = useState<Point[][]>([]);
   const [activeStroke, setActiveStroke] = useState<Point[]>([]);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [recognitionPending, setRecognitionPending] = useState(false);
+  const [phase, setPhase] = useState<RecognitionPhase>('idle');
   const recognitionTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isRecognizingRef = useRef(false);
-  const showDrawLayerRef = useRef(false);
+  const isSelectedRef = useRef(isSelected);
+  const isDrawingRef = useRef(false);
+  isSelectedRef.current = isSelected;
 
-  const pad = Math.max(0, (INPUT_CANVAS_SIZE - width) / 2);
   const hasStrokes = completedStrokes.length > 0 || activeStroke.length > 0;
-  const showDrawLayer = isSelected || recognitionPending || hasStrokes;
-  showDrawLayerRef.current = showDrawLayer;
+  const strokeWidth = Math.max(1.5, Math.min(width, height) * 0.14);
+
+  const snapshotStrokes = useCallback((): Point[][] => {
+    const strokes = [...completedStrokesRef.current];
+    if (activeStrokeRef.current.length > 0) {
+      strokes.push([...activeStrokeRef.current]);
+    }
+    return strokes;
+  }, []);
 
   const clearStrokes = useCallback(() => {
     completedStrokesRef.current = [];
     activeStrokeRef.current = [];
     setCompletedStrokes([]);
     setActiveStroke([]);
-    setIsDrawing(false);
-    setRecognitionPending(false);
+    isDrawingRef.current = false;
+    setPhase('idle');
   }, []);
 
   const runRecognition = useCallback(async () => {
     if (isRecognizingRef.current) return;
     recognitionTimer.current = null;
 
-    const strokes = [...completedStrokesRef.current];
-    if (activeStrokeRef.current.length > 0) {
-      strokes.push([...activeStrokeRef.current]);
-    }
+    const strokes = snapshotStrokes();
     if (strokes.flat().length < MIN_STROKE_POINTS) {
-      setRecognitionPending(false);
+      setPhase('idle');
       return;
     }
 
     isRecognizingRef.current = true;
-    setRecognitionPending(true);
+    setPhase('recognizing');
     try {
-      const rec = await recognizeLetter(
-        strokes,
-        INPUT_CANVAS_SIZE,
-        INPUT_CANVAS_SIZE,
-      );
+      const rec = await recognizeLetter(strokes, width, height);
+      if (__DEV__) {
+        console.info('[GridCell] recognized', rec);
+      }
       if (rec.name && rec.name !== '?') {
         onLetter(rec.name);
       }
+    } catch (err) {
+      console.warn('[GridCell] recognition failed', err);
     } finally {
       isRecognizingRef.current = false;
       clearStrokes();
     }
-  }, [onLetter, clearStrokes]);
+  }, [onLetter, clearStrokes, width, height, snapshotStrokes]);
 
   const scheduleRecognition = useCallback(() => {
-    setRecognitionPending(true);
     clearTimeout(recognitionTimer.current ?? undefined);
+    setPhase('waiting');
     recognitionTimer.current = setTimeout(() => {
       void runRecognition();
     }, RECOGNITION_DEBOUNCE_MS);
@@ -132,99 +152,133 @@ export function GridCell({
   }, [runRecognition]);
 
   useEffect(() => {
-    if (isSelected) {
-      const t = setTimeout(() => inputRef.current?.focus(), 50);
-      return () => clearTimeout(t);
+    if (!isSelected) {
+      const strokeCount = snapshotStrokes().flat().length;
+      if (strokeCount >= MIN_STROKE_POINTS || recognitionTimer.current) {
+        flushRecognition();
+      } else {
+        clearTimeout(recognitionTimer.current ?? undefined);
+        recognitionTimer.current = null;
+        if (!isRecognizingRef.current) {
+          clearStrokes();
+        }
+      }
+      return;
     }
 
-    // Deselect: finish pending recognition instead of discarding strokes
-    if (isRecognizingRef.current) return;
-
-    const strokeCount =
-      completedStrokesRef.current.flat().length + activeStrokeRef.current.length;
-    if (strokeCount >= MIN_STROKE_POINTS || recognitionTimer.current) {
-      flushRecognition();
-    } else {
-      clearStrokes();
-    }
-  }, [isSelected, flushRecognition, clearStrokes]);
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, [isSelected, clearStrokes, flushRecognition, snapshotStrokes]);
 
   useEffect(() => {
-    return () => {
-      clearTimeout(recognitionTimer.current ?? undefined);
-    };
+    return () => clearTimeout(recognitionTimer.current ?? undefined);
   }, []);
+
+  const measureSurface = useCallback(() => {
+    drawSurfaceRef.current?.measureInWindow((x, y, w, h) => {
+      layoutRef.current = { x, y, width: w, height: h };
+    });
+  }, []);
+
+  const beginStroke = useCallback(
+    (point: Point) => {
+      clearTimeout(recognitionTimer.current ?? undefined);
+      recognitionTimer.current = null;
+      isDrawingRef.current = true;
+      setPhase('drawing');
+      inputRef.current?.blur();
+      activeStrokeRef.current = [point];
+      setActiveStroke([point]);
+    },
+    [],
+  );
+
+  const appendPoint = useCallback(
+    (point: Point) => {
+      activeStrokeRef.current = [...activeStrokeRef.current, point];
+      setActiveStroke([...activeStrokeRef.current]);
+      scheduleRecognition();
+    },
+    [scheduleRecognition],
+  );
+
+  const endStroke = useCallback(() => {
+    if (activeStrokeRef.current.length > 0) {
+      completedStrokesRef.current = [
+        ...completedStrokesRef.current,
+        activeStrokeRef.current,
+      ];
+      setCompletedStrokes([...completedStrokesRef.current]);
+      activeStrokeRef.current = [];
+      setActiveStroke([]);
+    }
+    isDrawingRef.current = false;
+    scheduleRecognition();
+  }, [scheduleRecognition]);
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => showDrawLayerRef.current,
-      onMoveShouldSetPanResponder: () => showDrawLayerRef.current,
-
+      onStartShouldSetPanResponder: () => isSelectedRef.current,
+      onMoveShouldSetPanResponder: () => isSelectedRef.current,
       onPanResponderGrant: (evt) => {
-        stopPointerBubble(evt);
-        clearTimeout(recognitionTimer.current ?? undefined);
-        recognitionTimer.current = null;
-        setRecognitionPending(false);
-        setIsDrawing(true);
-        inputRef.current?.blur();
-        const { locationX: x, locationY: y } = evt.nativeEvent;
-        activeStrokeRef.current = [{ x, y }];
-        setActiveStroke([{ x, y }]);
+        beginStroke(getLocalPoint(evt, layoutRef.current));
       },
-
       onPanResponderMove: (evt) => {
-        stopPointerBubble(evt);
-        const { locationX: x, locationY: y } = evt.nativeEvent;
-        activeStrokeRef.current = [...activeStrokeRef.current, { x, y }];
-        setActiveStroke([...activeStrokeRef.current]);
-        scheduleRecognition();
+        appendPoint(getLocalPoint(evt, layoutRef.current));
       },
-
-      onPanResponderRelease: (evt) => {
-        stopPointerBubble(evt);
-        if (activeStrokeRef.current.length > 0) {
-          completedStrokesRef.current = [
-            ...completedStrokesRef.current,
-            activeStrokeRef.current,
-          ];
-          setCompletedStrokes([...completedStrokesRef.current]);
-          activeStrokeRef.current = [];
-          setActiveStroke([]);
-        }
-        setIsDrawing(false);
-        scheduleRecognition();
-      },
-
-      onPanResponderTerminate: (evt) => {
-        stopPointerBubble(evt);
-        if (activeStrokeRef.current.length > 0) {
-          completedStrokesRef.current = [
-            ...completedStrokesRef.current,
-            activeStrokeRef.current,
-          ];
-          setCompletedStrokes([...completedStrokesRef.current]);
-          activeStrokeRef.current = [];
-          setActiveStroke([]);
-        }
-        setIsDrawing(false);
-        scheduleRecognition();
-      },
+      onPanResponderRelease: () => endStroke(),
+      onPanResponderTerminate: () => endStroke(),
     }),
   ).current;
+
+  const webPointerHandlers =
+    Platform.OS === 'web'
+      ? {
+          onPointerDown: (e: GestureResponderEvent) => {
+            if (!isSelectedRef.current) return;
+            e.preventDefault?.();
+            (e as unknown as { stopPropagation?: () => void }).stopPropagation?.();
+            measureSurface();
+            const target = e.currentTarget as unknown as {
+              setPointerCapture?: (id: number) => void;
+            };
+            const pid = (e.nativeEvent as { pointerId?: number }).pointerId;
+            if (pid != null) target.setPointerCapture?.(pid);
+            beginStroke(getLocalPoint(e, layoutRef.current));
+          },
+          onPointerMove: (e: GestureResponderEvent) => {
+            if (!isDrawingRef.current) return;
+            e.preventDefault?.();
+            appendPoint(getLocalPoint(e, layoutRef.current));
+          },
+          onPointerUp: (e: GestureResponderEvent) => {
+            if (!isDrawingRef.current && activeStrokeRef.current.length === 0) return;
+            e.preventDefault?.();
+            (e as unknown as { stopPropagation?: () => void }).stopPropagation?.();
+            endStroke();
+          },
+          onPointerCancel: () => endStroke(),
+          onPointerLeave: () => {
+            if (isDrawingRef.current) endStroke();
+          },
+        }
+      : {};
 
   const handleTextChange = (text: string) => {
     const letter = text.slice(-1).toUpperCase().replace(/[^A-Z]/g, '');
     clearTimeout(recognitionTimer.current ?? undefined);
     recognitionTimer.current = null;
     clearStrokes();
-    onLetter(letter);
+    if (letter) onLetter(letter);
   };
-
-  const showLetterInInput = isSelected && !isDrawing && !hasStrokes;
 
   function toSvgPoints(pts: Point[]) {
     return pts.map((p) => `${p.x},${p.y}`).join(' ');
   }
+
+  const inkVisible =
+    hasStrokes || phase === 'waiting' || phase === 'recognizing' || phase === 'drawing';
+  const showLetter = userInput && !inkVisible;
 
   const cellStyle = [
     styles.cell,
@@ -237,114 +291,137 @@ export function GridCell({
       borderColor,
       borderWidth,
     },
-    (isSelected || recognitionPending) && styles.cellSelected,
+    isSelected && styles.cellSelected,
   ];
 
-  const drawOverlay = showDrawLayer ? (
-    <View
-      style={[
-        styles.drawOverlay,
-        { width: INPUT_CANVAS_SIZE, height: INPUT_CANVAS_SIZE, left: -pad, top: -pad },
-      ]}
-      {...panResponder.panHandlers}
-      {...(Platform.OS === 'web'
-        ? {
-            onMouseDown: stopPointerBubble,
-            onMouseUp: stopPointerBubble,
-            onClick: stopPointerBubble,
-            onPointerDown: stopPointerBubble,
-            onPointerUp: stopPointerBubble,
-          }
-        : {})}
-    >
-      {hasStrokes && (
-        <Svg
-          width={INPUT_CANVAS_SIZE}
-          height={INPUT_CANVAS_SIZE}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
+  const inner = (
+    <>
+      {cellNumber !== undefined && (
+        <Text style={styles.cellNumber} pointerEvents="none">
+          {cellNumber}
+        </Text>
+      )}
+
+      {(isSelected || inkVisible) && (
+        <View
+          ref={drawSurfaceRef}
+          style={[
+            styles.drawSurface,
+            Platform.OS === 'web' && styles.drawSurfaceWeb,
+            !isSelected && styles.drawSurfacePending,
+          ]}
+          onLayout={measureSurface}
+          {...(isSelected
+            ? Platform.OS === 'web'
+              ? webPointerHandlers
+              : panResponder.panHandlers
+            : {})}
         >
-          {completedStrokes.map((stroke, i) =>
-            stroke.length > 1 ? (
-              <Polyline
-                key={i}
-                points={toSvgPoints(stroke)}
-                stroke="#1a1a2e"
-                strokeWidth={3}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                fill="none"
-              />
-            ) : null,
+          {inkVisible && (
+            <Svg
+              width={width}
+              height={height}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            >
+              {completedStrokes.map((stroke, i) =>
+                stroke.length > 1 ? (
+                  <Polyline
+                    key={`c-${i}`}
+                    points={toSvgPoints(stroke)}
+                    stroke="#1a1a2e"
+                    strokeWidth={strokeWidth}
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                ) : stroke.length === 1 ? (
+                  <Circle
+                    key={`c-${i}`}
+                    cx={stroke[0].x}
+                    cy={stroke[0].y}
+                    r={strokeWidth / 2}
+                    fill="#1a1a2e"
+                  />
+                ) : null,
+              )}
+              {activeStroke.map((p, i) =>
+                i === 0 && activeStroke.length === 1 ? (
+                  <Circle
+                    key="a-dot"
+                    cx={p.x}
+                    cy={p.y}
+                    r={strokeWidth / 2}
+                    fill="#1a1a2e"
+                  />
+                ) : null,
+              )}
+              {activeStroke.length > 1 && (
+                <Polyline
+                  points={toSvgPoints(activeStroke)}
+                  stroke="#1a1a2e"
+                  strokeWidth={strokeWidth}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  fill="none"
+                />
+              )}
+            </Svg>
           )}
-          {activeStroke.length > 1 && (
-            <Polyline
-              points={toSvgPoints(activeStroke)}
-              stroke="#1a1a2e"
-              strokeWidth={3}
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              fill="none"
-            />
-          )}
-        </Svg>
+        </View>
       )}
 
       {isSelected && (
         <TextInput
           ref={inputRef}
-          value={showLetterInInput ? userInput : ''}
+          value={showLetter ? userInput : ''}
           onChangeText={handleTextChange}
           maxLength={1}
           autoCapitalize="characters"
           autoCorrect={false}
           autoComplete="off"
           spellCheck={false}
-          selectTextOnFocus
-          style={styles.input}
+          caretHidden
+          style={styles.hiddenInput}
+          pointerEvents="none"
           {...(Platform.OS === 'web'
             ? { inputMode: 'text' as const, enterKeyHint: 'next' as const }
             : {})}
         />
       )}
-    </View>
-  ) : null;
 
-  const content = (
-    <>
-      {cellNumber !== undefined && (
-        <Text style={styles.cellNumber}>{cellNumber}</Text>
-      )}
-      {drawOverlay}
-      {!showDrawLayer && (
-        <Text style={[styles.letter, letterStyle]}>{userInput}</Text>
-      )}
-      {showDrawLayer && !hasStrokes && !isDrawing && userInput ? (
-        <Text style={[styles.letter, styles.letterCommitted, letterStyle]} pointerEvents="none">
+      {(showLetter || (!isSelected && userInput)) ? (
+        <Text style={[styles.letter, letterStyle]} pointerEvents="none">
           {userInput}
         </Text>
       ) : null}
     </>
   );
 
-  if (!isSelected && !recognitionPending && !hasStrokes) {
+  if (!isSelected) {
     return (
       <Pressable
         onPress={(e) => {
-          stopPointerBubble(e);
+          if ('stopPropagation' in e && typeof e.stopPropagation === 'function') {
+            e.stopPropagation();
+          }
           onSelect();
         }}
         style={cellStyle}
       >
-        {content}
+        {inner}
       </Pressable>
     );
   }
 
   return (
-    <Pressable onPress={stopPointerBubble} style={cellStyle}>
-      {content}
-    </Pressable>
+    <View
+      style={cellStyle}
+      onStartShouldSetResponder={() => true}
+      onResponderTerminationRequest={() => false}
+    >
+      {inner}
+    </View>
   );
 }
 
@@ -353,7 +430,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'visible',
+    overflow: 'hidden',
     zIndex: 1,
   },
   cellSelected: {
@@ -367,39 +444,31 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#555',
     lineHeight: 9,
+    zIndex: 4,
+  },
+  drawSurface: {
+    ...StyleSheet.absoluteFillObject,
     zIndex: 2,
   },
-  drawOverlay: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.98)',
-    borderWidth: 1,
-    borderColor: '#3a6ef5',
-    borderRadius: 4,
-    zIndex: 3,
+  drawSurfaceWeb: {
+    touchAction: 'none',
+    cursor: 'crosshair',
+    userSelect: 'none',
+  } as object,
+  drawSurfacePending: {
+    pointerEvents: 'none',
   },
-  input: {
-    width: '100%',
-    height: '100%',
-    textAlign: 'center',
-    fontSize: 48,
-    fontWeight: '700',
-    color: '#1a1a2e',
-    padding: 0,
-    margin: 0,
-    backgroundColor: 'transparent',
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as const } : {}),
+  hiddenInput: {
+    position: 'absolute',
+    width: 1,
+    height: 1,
+    opacity: 0,
+    zIndex: 1,
   },
   letter: {
     fontSize: 13,
     fontWeight: '700',
     color: '#1a1a2e',
-  },
-  letterCommitted: {
-    position: 'absolute',
-    zIndex: 0,
-    opacity: 0.35,
-    fontSize: 13,
+    zIndex: 3,
   },
 });

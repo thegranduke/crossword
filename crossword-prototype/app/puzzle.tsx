@@ -101,12 +101,11 @@ export default function PuzzleScreen() {
     .sort((a, b) => a.number - b.number);
 
   return (
-    <Pressable style={styles.root} onPress={handleDeselect}>
+    <View style={styles.root}>
       <ScrollView
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
       >
-        <Pressable onPress={handleDeselect} style={styles.tapToDeselect}>
         <View style={styles.titleRow}>
           <Text style={styles.sectionTitle}>Grid</Text>
           <TouchableOpacity
@@ -119,16 +118,22 @@ export default function PuzzleScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.metaText}>
-          {puzzle.gridSize}×{puzzle.gridSize} · {puzzle.placedWords.length} words ·{' '}
-          {selectedCell
-            ? activeClueLabel
-              ? `Active: ${activeClueLabel} — type or draw in the blue cell`
-              : 'type or draw in the highlighted cell'
-            : 'tap a cell to enter a letter'}
-        </Text>
+        <Pressable onPress={handleDeselect}>
+          <Text style={styles.metaText}>
+            {puzzle.gridSize}×{puzzle.gridSize} · {puzzle.placedWords.length} words ·{' '}
+            {selectedCell
+              ? activeClueLabel
+                ? `Active: ${activeClueLabel} — draw in the blue cell, wait 1.5s for ML`
+                : 'draw in the highlighted cell'
+              : 'tap a cell to enter a letter'}
+          </Text>
+        </Pressable>
 
-        <View style={styles.gridWrapper}>
+        <View
+          style={styles.gridWrapper}
+          onStartShouldSetResponder={() => true}
+          onResponderTerminationRequest={() => false}
+        >
           <Grid
             grid={puzzle.grid}
             placedWords={puzzle.placedWords}
@@ -136,11 +141,10 @@ export default function PuzzleScreen() {
             highlightedCellKeys={highlightedCellKeys}
             onCellPress={handleCellPress}
             onCellLetter={handleCellLetter}
-            onCanvasPress={handleDeselect}
           />
         </View>
 
-        <View style={styles.clueColumns}>
+        <Pressable style={styles.clueColumns} onPress={handleDeselect}>
           <View style={styles.clueColumn}>
             <ClueSection
               title="Across"
@@ -157,10 +161,9 @@ export default function PuzzleScreen() {
               activeWords={activeWords}
             />
           </View>
-        </View>
         </Pressable>
       </ScrollView>
-    </Pressable>
+    </View>
   );
 }
 

@@ -11,8 +11,6 @@ type Props = {
   highlightedCellKeys?: Set<string>;
   onCellPress?: (row: number, col: number) => void;
   onCellLetter?: (row: number, col: number, letter: string) => void;
-  /** Tap on grid background (not on a cell) — e.g. deselect active cell */
-  onCanvasPress?: () => void;
 };
 
 function resolveCellSize(gridSize: number, maxCanvasWidth: number): number {
@@ -27,7 +25,6 @@ export function Grid({
   highlightedCellKeys,
   onCellPress,
   onCellLetter,
-  onCanvasPress,
 }: Props) {
   const { width } = useWindowDimensions();
   const gridSize = grid.length;
@@ -98,12 +95,6 @@ export function Grid({
           />
         );
       })}
-      {/* Tap gaps between cells to deselect — cells stop propagation */}
-      <View
-        style={[StyleSheet.absoluteFill, styles.canvasHitArea]}
-        onStartShouldSetResponder={() => true}
-        onResponderRelease={onCanvasPress}
-      />
     </View>
   );
 }
@@ -112,9 +103,6 @@ const styles = StyleSheet.create({
   canvas: {
     position: 'relative',
     overflow: 'visible',
-  },
-  canvasHitArea: {
-    zIndex: 0,
   },
   letterCorrect: {
     color: '#1a7a1a',
